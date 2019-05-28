@@ -3,12 +3,21 @@
   copy:
     content: '{{ macos_pf_rules }}'
     dest: '{{ macos_pf_anchor_path }}'
-  register: anchor
+  register: create_anchor
+  when: macos_pf_enable
+
+- name: Delete packet filter anchor
+  file:
+    path: '{{ macos_pf_anchor_path }}'
+    state: absent
+  register: delete_anchor
+  when: not macos_pf_enable
 
 - name: Change packet filter config
   lineinfile:
     path: '{{ macos_pf_config_path }}'
     line: '{{ item }}'
+    state: '{{ "present" if macos_pf_enable else "absent" }}'
     backup: yes
   with_items:
     - 'anchor "{{ macos_pf_anchor }}"'
@@ -21,28 +30,36 @@
 
 - name: Reload packet filter config
   command: pfctl -f '{{ macos_pf_config_path }}'
-  when: anchor is changed or config is changed
+  when: |
+    create_anchor is changed or
+    delete_anchor is changed or
+    config is changed
 
-- name: Verify packet filter is enabled
+- name: Check packet filter status
   shell: >
-    pfctl -s info 2>/dev/null | egrep -i '^status: enabled'
+    pfctl -s info 2>/dev/null | grep -i '^status: enabled'
   ignore_errors: yes
   changed_when: no
   register: pf_enabled
 
 - name: Enable packet filter
   command: pfctl -e
-  when: pf_enabled is failed
+  when: pf_enabled is failed and macos_pf_enable
 
-- name: Enable packet filter permanently
+- name: Disable packet filter
+  command: pfctl -d
+  when: pf_enabled is succeeded and not macos_pf_enable
+
+- name: Set packet filter permanently
   lineinfile:
     path: '{{ macos_pf_plist }}'
     line: "\t\t<string>-e</string>"
     insertafter: '<string>pfctl</string>'
+    state: '{{ "present" if macos_pf_enable else "absent" }}'
   ignore_errors: yes
   register: enable_pf_permanently
 
-- name: Fail when packet filter couldn't be enabled permanently
+- name: Fail when packet filter couldn't be set permanently
   fail:
     msg: >
       You must disable System Integrity Protection (SIP) during this run!
